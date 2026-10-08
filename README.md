@@ -18,6 +18,7 @@ Each app has its own name, icon and app ID, so they install side by side.
   - Menu > **Navigation: Pointer** switches to an on-screen pointer instead, for controls the highlight can't reach, such as buttons inside an embedded video player.
   - In fullscreen video: **Select** / **Play-Pause** toggles playback, **Left/Right** and **Rewind/Fast-forward** seek 10 s.
   - **Back** exits fullscreen, then goes back in history, restoring the previous page's scroll position and highlighted item. Press it twice on the first page to exit.
+  - **CineJoy browsing:** opening a show keeps the browse page loaded during the app session. Back returns to its already-loaded sections, scroll position and highlight, so infinite scrolling can continue.
   - **Menu (≡)** opens options: Home, Reload, navigation mode (focus highlight or pointer), ad blocker on/off, desktop site, site address, update filter lists, clear cache, check for updates, exit.
 - Login and session are kept (cookies are flushed to disk), and the app reopens the last page of the site you had open.
 - **Site address:** if the site moves to a new domain, enter the new address in Menu > Site address. No new build is needed. **Default** goes back to the built-in address.
