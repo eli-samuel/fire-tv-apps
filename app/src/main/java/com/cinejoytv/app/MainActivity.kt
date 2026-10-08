@@ -189,7 +189,8 @@ class MainActivity : Activity() {
         } catch (e: IOException) {
             ""
         }
-        injectJs = (assets.open("inject.js").bufferedReader().use { it.readText() } + "\n" + siteJs)
+        injectJs = (assets.open("scroll-state.js").bufferedReader().use { it.readText() } + "\n" +
+            assets.open("inject.js").bufferedReader().use { it.readText() } + "\n" + siteJs)
             .replace("__SITE_DOMAIN__", Site.domain)
             .replace("__STRICT__", BuildConfig.STRICT_NAV.toString())
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -375,7 +376,12 @@ class MainActivity : Activity() {
                 webView.evaluateJavascript("document.exitFullscreen&&document.exitFullscreen()", null)
                 hideCustomView()
             }
-            webView.canGoBack() -> webView.goBack()
+            webView.canGoBack() -> {
+                // Capture before history changes, including routes within the same document.
+                webView.evaluateJavascript("window.__cjtvSaveScroll&&__cjtvSaveScroll()") {
+                    webView.goBack()
+                }
+            }
             SystemClock.uptimeMillis() - lastBackPress < 2000 -> finish()
             else -> {
                 lastBackPress = SystemClock.uptimeMillis()
