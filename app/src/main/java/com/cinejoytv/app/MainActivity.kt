@@ -44,7 +44,9 @@ class MainActivity : Activity() {
     private lateinit var blocker: AdBlocker
     private lateinit var updater: Updater
     private lateinit var injectJs: String
-    private var documentStartScript: ScriptHandler? = null
+    private val documentStartScripts = mutableMapOf<WebView, ScriptHandler>()
+    // Keep at most one loaded catalog while the user opens a show and its player.
+    private var browseView: WebView? = null
 
     private var customView: View? = null
     private var customCallback: WebChromeClient.CustomViewCallback? = null
@@ -82,8 +84,8 @@ class MainActivity : Activity() {
         webView.requestFocus()
     }
 
-    private fun setupWebView() {
-        with(webView.settings) {
+    private fun setupWebView(target: WebView = webView) {
+        with(target.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
             @Suppress("DEPRECATION")
@@ -101,15 +103,15 @@ class MainActivity : Activity() {
         }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
-            setAcceptThirdPartyCookies(webView, true)
+            setAcceptThirdPartyCookies(target, true)
         }
-        webView.setBackgroundColor(Color.BLACK)
-        webView.isFocusable = true
-        webView.isFocusableInTouchMode = true
+        target.setBackgroundColor(Color.BLACK)
+        target.isFocusable = true
+        target.isFocusableInTouchMode = true
 
-        installScript()
+        installScript(target)
 
-        webView.webViewClient = object : WebViewClient() {
+        target.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 if (!request.isForMainFrame && (blocker.shouldBlock(request.url) || siteBlocked(request.url))) {
                     blocker.emptyResponse()
@@ -125,19 +127,19 @@ class MainActivity : Activity() {
                 blockNavigation(Uri.parse(url))
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                if (documentStartScript == null) view.evaluateJavascript(injectJs, null)
+                if (view !in documentStartScripts) view.evaluateJavascript(injectJs, null)
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
-                if (documentStartScript == null) view.evaluateJavascript(injectJs, null)
+                if (view !in documentStartScripts) view.evaluateJavascript(injectJs, null)
                 CookieManager.getInstance().flush()
                 saveLastUrl()
             }
         }
 
-        webView.webChromeClient = object : WebChromeClient() {
+        target.webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
-                if (customView != null) { callback.onCustomViewHidden(); return }
+                if (target !== webView || customView != null) { callback.onCustomViewHidden(); return }
                 customView = view
                 customCallback = callback
                 view.setBackgroundColor(Color.BLACK)
@@ -151,14 +153,14 @@ class MainActivity : Activity() {
             // Popups: only user-initiated windows pointing at the site itself are allowed,
             // and they open in the main WebView instead of a new window.
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-                if (!isUserGesture) { notifyBlocked("popup"); return false }
+                if (view !== webView || !isUserGesture) { notifyBlocked("popup"); return false }
                 val probe = WebView(this@MainActivity)
                 probe.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest) =
-                        handlePopup(v, request.url)
+                        handlePopup(v, request.url, view)
 
                     @Deprecated("Used on API < 24")
-                    override fun shouldOverrideUrlLoading(v: WebView, url: String) = handlePopup(v, Uri.parse(url))
+                    override fun shouldOverrideUrlLoading(v: WebView, url: String) = handlePopup(v, Uri.parse(url), view)
                 }
                 (resultMsg.obj as WebView.WebViewTransport).webView = probe
                 resultMsg.sendToTarget()
@@ -183,7 +185,7 @@ class MainActivity : Activity() {
      * (Re)builds inject.js for the current site and registers it to run at document start.
      * A flavor can add site-specific tweaks in src/<flavor>/assets/site.js.
      */
-    private fun installScript() {
+    private fun installScript(target: WebView = webView) {
         val siteJs = try {
             assets.open("site.js").bufferedReader().use { it.readText() }
         } catch (e: IOException) {
@@ -194,8 +196,8 @@ class MainActivity : Activity() {
             .replace("__SITE_DOMAIN__", Site.domain)
             .replace("__STRICT__", BuildConfig.STRICT_NAV.toString())
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            documentStartScript?.remove()
-            documentStartScript = WebViewCompat.addDocumentStartJavaScript(webView, injectJs, setOf("*"))
+            documentStartScripts.remove(target)?.remove()
+            documentStartScripts[target] = WebViewCompat.addDocumentStartJavaScript(target, injectJs, setOf("*"))
         }
     }
 
@@ -204,11 +206,63 @@ class MainActivity : Activity() {
         return AdBlocker.matches(host, SITE_BLOCKLIST)
     }
 
-    private fun handlePopup(probe: WebView, uri: Uri): Boolean {
+    private fun handlePopup(probe: WebView, uri: Uri, source: WebView): Boolean {
         val host = uri.host?.lowercase()
-        if (host != null && Site.isFirstParty(host)) webView.loadUrl(uri.toString()) else notifyBlocked("popup")
+        if (source === webView && host != null && Site.isFirstParty(host) && uri.scheme in setOf("http", "https")) {
+            val from = source.url?.let(Uri::parse)
+            if (!BuildConfig.STRICT_NAV && browseView == null && isShowPage(uri) &&
+                from != null && from.host?.let { Site.isFirstParty(it.lowercase()) } == true &&
+                !isShowPage(from) && !from.path.orEmpty().startsWith("/watch/")) {
+                openShow(uri.toString())
+            } else {
+                webView.loadUrl(uri.toString())
+            }
+        } else notifyBlocked("popup")
         probe.post { probe.destroy() }
         return true
+    }
+
+    private fun isShowPage(uri: Uri): Boolean {
+        val parts = uri.path.orEmpty().trim('/').split('/')
+        return parts.size == 2 && parts[0] in setOf("movie", "series") && parts[1].isNotEmpty()
+    }
+
+    private fun openShow(url: String) {
+        val catalog = webView
+        val show = WebView(this)
+        setupWebView(show)
+        browseView = catalog
+        catalog.onPause()
+        // INVISIBLE keeps the catalog's viewport and rendered sections intact.
+        catalog.visibility = View.INVISIBLE
+        webView = show
+        root.addView(show, root.indexOfChild(cursor), MATCH)
+        show.loadUrl(url)
+        show.requestFocus()
+    }
+
+    private fun returnToBrowse() {
+        val catalog = browseView ?: return
+        val show = webView
+        browseView = null
+        webView = catalog
+        destroyWebView(show)
+        catalog.visibility = View.VISIBLE
+        catalog.onResume()
+        catalog.requestFocus()
+        saveLastUrl()
+    }
+
+    private fun destroyWebView(view: WebView) {
+        documentStartScripts.remove(view)?.remove()
+        root.removeView(view)
+        view.stopLoading()
+        view.destroy()
+    }
+
+    private fun discardBrowseView() {
+        browseView?.let { destroyWebView(it) }
+        browseView = null
     }
 
     /**
@@ -382,6 +436,7 @@ class MainActivity : Activity() {
                     webView.goBack()
                 }
             }
+            browseView != null -> returnToBrowse()
             SystemClock.uptimeMillis() - lastBackPress < 2000 -> finish()
             else -> {
                 lastBackPress = SystemClock.uptimeMillis()
@@ -411,7 +466,7 @@ class MainActivity : Activity() {
             .setTitle(R.string.app_name)
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> webView.loadUrl(Site.home)
+                    0 -> { discardBrowseView(); webView.loadUrl(Site.home) }
                     1 -> webView.reload()
                     2 -> {
                         cursorEnabled = !cursorEnabled
@@ -424,6 +479,7 @@ class MainActivity : Activity() {
                         webView.reload()
                     }
                     4 -> {
+                        discardBrowseView()
                         prefs.edit().putBoolean("desktop", !desktop).apply()
                         webView.settings.userAgentString = userAgent()
                         webView.reload()
@@ -439,7 +495,7 @@ class MainActivity : Activity() {
                             }
                         }
                     }
-                    7 -> { webView.clearCache(true); webView.reload() }
+                    7 -> { discardBrowseView(); webView.clearCache(true); webView.reload() }
                     8 -> updater.check(manual = true)
                     9 -> finish()
                 }
@@ -476,6 +532,7 @@ class MainActivity : Activity() {
             return
         }
         prefs.edit().remove("lastUrl").apply()
+        discardBrowseView()
         installScript()
         webView.loadUrl(Site.home)
     }
@@ -522,8 +579,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        discardBrowseView()
+        destroyWebView(webView)
         root.removeAllViews()
-        webView.destroy()
         super.onDestroy()
     }
 

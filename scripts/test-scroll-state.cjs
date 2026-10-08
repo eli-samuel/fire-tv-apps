@@ -10,7 +10,8 @@ const { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const script = ['scroll-state.js', 'inject.js'].map(name =>
   fs.readFileSync(path.join(root, 'app/src/main/assets', name), 'utf8')
-    .replaceAll('__SITE_DOMAIN__', 'localhost').replaceAll('__STRICT__', 'false')).join('\n');
+    .replaceAll('__SITE_DOMAIN__', 'localhost').replaceAll('__STRICT__', 'false')).join('\n') + '\n' +
+  fs.readFileSync(path.join(root, 'app/src/cinejoy/assets/site.js'), 'utf8').replaceAll('__SITE_DOMAIN__', 'localhost');
 const chrome = process.argv[2] || process.env.CHROME_PATH ||
   (process.platform === 'win32' ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : 'google-chrome');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -19,7 +20,31 @@ async function main() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fire-tv-scroll-test-'));
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html');
-    if (req.url === '/show') return res.end('<h1>Show details</h1><div style="height:4000px"></div><script>' + script + '</script>');
+    if (req.url === '/show' || req.url.startsWith('/series/')) return res.end('<h1>Show details</h1>' +
+      '<a id="related" href="/series/related">Related show</a><div style="height:4000px"></div><script>' + script + '</script>');
+    if (req.url === '/catalog') return res.end(`<!doctype html><html><head><script>${script}</script></head><body>
+      <div id="sections"></div><div id="more" style="height:40px">More</div>
+      <script>
+      window.sectionsLoaded = 0;
+      window.routerClicks = 0;
+      var loading = false;
+      function appendSection() {
+        var section = document.createElement('section');
+        section.style.height = '1400px';
+        section.innerHTML = '<a id="show-' + (++sectionsLoaded) + '" href="/series/show-' + sectionsLoaded + '">Show ' + sectionsLoaded + '</a>';
+        document.getElementById('sections').appendChild(section);
+      }
+      appendSection();
+      new IntersectionObserver(function (entries) {
+        if (!entries[0].isIntersecting || loading) return;
+        loading = true;
+        setTimeout(function () { appendSection(); loading = false; }, 100);
+      }).observe(document.getElementById('more'));
+      // A delegated SPA router would unmount the catalog if the click reached it.
+      document.addEventListener('click', function (event) {
+        if (event.target.closest('a')) routerClicks++;
+      });
+      </script></body></html>`);
     const storage = req.url === '/blocked-storage' ?
       "Object.defineProperty(window,'sessionStorage',{get:function(){throw new Error('blocked')}});" : '';
     res.end(`<!doctype html><html><head><script>${storage}</script><script>${script}</script></head><body>
@@ -135,6 +160,33 @@ async function main() {
     await evaluate(`__cjtvCancelScrollRestore();history.replaceState('primitive-state','')`);
     assert.equal(await evaluate('history.state'), 'primitive-state');
     console.log('PASS: primitive history state is preserved');
+
+    await navigate('/catalog');
+    for (let section = 2; section <= 4; section++) {
+      await evaluate('scrollTo(0,document.documentElement.scrollHeight)');
+      await until(`sectionsLoaded >= ${section}`, 'infinite-scroll section ' + section);
+    }
+    await evaluate(`__cjtvCancelScrollRestore();scrollTo(0,4000);
+      __cjtvRestoreFocus({selector:'#show-4',href:'/series/show-4'});
+      window.originalSections = document.querySelector('#sections');window.opened = [];
+      window.open = function(url,target){opened.push({url:url,target:target});return {};};
+      document.querySelector('#show-4').click()`);
+    assert.deepEqual(await evaluate('opened'), [{ url: origin + '/series/show-4', target: '_blank' }]);
+    assert.equal(await evaluate('routerClicks'), 0);
+    // A second browser page mirrors MainActivity's separate show WebView.
+    const { targetId: showTarget } = await cdp('Target.createTarget', { url: origin + '/series/show-4' });
+    const { sessionId: showSession } = await cdp('Target.attachToTarget', { targetId: showTarget, flatten: true });
+    await until(`location.pathname === '/catalog' && scrollY === 4000`, 'retained catalog');
+    await cdp('Runtime.evaluate', { expression: `window.open=function(){throw new Error('Unexpected popup')};
+      document.querySelector('#related').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));`,
+      returnByValue: true }, showSession).then(result => assert.equal(result.exceptionDetails, undefined));
+    await cdp('Target.closeTarget', { targetId: showTarget });
+    assert.deepEqual(await evaluate(`({sameDOM:originalSections===document.querySelector('#sections'),
+      count:sectionsLoaded,y:scrollY,focus:document.querySelector('.cjtv-focus')?.id})`),
+      { sameDOM: true, count: 4, y: 4000, focus: 'show-4' });
+    await evaluate('scrollTo(0,document.documentElement.scrollHeight)');
+    await until('sectionsLoaded >= 5', 'continued infinite scrolling');
+    console.log('PASS: opening a show preserves four loaded sections, scroll and focus; infinite scrolling continues');
 
     await navigate('/blocked-storage');
     await evaluate(`__cjtvSaveScroll();history.pushState({},'', '/still-working');__cjtvSaveScroll()`);
