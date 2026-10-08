@@ -17,7 +17,7 @@ Each app has its own name, icon and app ID, so they install side by side.
   - **D-pad** moves a soft white highlight between clickable items (cards, buttons, menus, search box), like a TV app. **Select** opens the highlighted item. When nothing is left in that direction, the page scrolls so more content can load.
   - Menu > **Navigation: Pointer** switches to an on-screen pointer instead, for controls the highlight can't reach, such as buttons inside an embedded video player.
   - In fullscreen video: **Select** / **Play-Pause** toggles playback, **Left/Right** and **Rewind/Fast-forward** seek 10 s.
-  - **Back** exits fullscreen, then goes back in history. Press it twice on the first page to exit.
+  - **Back** exits fullscreen, then goes back in history, restoring the previous page's scroll position and highlighted item. Press it twice on the first page to exit.
   - **Menu (≡)** opens options: Home, Reload, navigation mode (focus highlight or pointer), ad blocker on/off, desktop site, site address, update filter lists, clear cache, check for updates, exit.
 - Login and session are kept (cookies are flushed to disk), and the app reopens the last page of the site you had open.
 - **Site address:** if the site moves to a new domain, enter the new address in Menu > Site address. No new build is needed. **Default** goes back to the built-in address.

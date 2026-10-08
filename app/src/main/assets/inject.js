@@ -139,6 +139,7 @@
 
   // Scroll whatever is under the cursor (inner scroll containers, carousels), else the page.
   window.__cjtvScroll = function (fx, fy, dx, dy) {
+    if (window.__cjtvCancelScrollRestore) window.__cjtvCancelScrollRestore();
     var px = dx * window.innerWidth, py = dy * window.innerHeight;
     var el = document.elementFromPoint(fx * window.innerWidth, fy * window.innerHeight);
     while (el && el !== document.body && el !== document.documentElement) {
@@ -190,13 +191,14 @@
     return cache;
   }
 
-  function mark(e) {
+  function mark(e, restoring) {
     if (current) current.classList.remove('cjtv-focus');
     current = e;
     e.classList.add('cjtv-focus');
     if (!/^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName)) {
       try { e.focus({ preventScroll: true }); } catch (x) {}
     }
+    if (restoring) return;
     e.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
     var r = rect(e);
     if (r.top < innerHeight * 0.12 || r.bottom > innerHeight * 0.88 || r.left < 0 || r.right > innerWidth) {
@@ -204,9 +206,21 @@
     }
   }
 
+  // Restore the remote highlight without scrolling or triggering hover menus.
+  window.__cjtvRestoreFocus = function (saved) {
+    var e = document.querySelector(saved.selector);
+    if (saved.href && (!e || e.getAttribute('href') !== saved.href)) {
+      e = [].slice.call(document.querySelectorAll('a[href]')).filter(function (link) {
+        return link.getAttribute('href') === saved.href && visible(link);
+      })[0];
+    }
+    if (e && (e !== current || !e.classList.contains('cjtv-focus')) && visible(e)) mark(e, true);
+  };
+
   function gap(a1, a2, b1, b2) { return b2 < a1 ? a1 - b2 : (b1 > a2 ? b1 - a2 : 0); }
 
   window.__cjtvNav = function (dir) {
+    if (window.__cjtvCancelScrollRestore) window.__cjtvCancelScrollRestore();
     var list = collect().filter(visible), best = null, bestScore = Infinity;
     if (!current || !current.isConnected || !visible(current)) {
       // Nothing selected yet: start with the top-left item on screen.
@@ -249,6 +263,7 @@
   // Centre of the selected element in CSS pixels, plus viewport width for scaling.
   // In strict mode, overlays covering that point are cleared first so the tap reaches the element.
   window.__cjtvTarget = function () {
+    if (window.__cjtvCancelScrollRestore) window.__cjtvCancelScrollRestore();
     if (!current || !current.isConnected) return null;
     var r = rect(current);
     var x = Math.min(Math.max(r.left + r.width / 2, 1), innerWidth - 1);
