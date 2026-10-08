@@ -178,6 +178,9 @@
     if (extra.length < 5000) {
       for (var i = 0; i < extra.length; i++) {
         var e = extra[i], p = e.parentElement;
+        // Children of known controls cannot be separate focus targets. Avoid resolving thousands
+        // of inherited cursor styles in poster grids just to discard those children later.
+        if (e.closest(SEL)) continue;
         // cursor is inherited, so only take the outermost element of a pointer subtree.
         if (getComputedStyle(e).cursor === 'pointer' && !(p && getComputedStyle(p).cursor === 'pointer')) list.push(e);
       }
